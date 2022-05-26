@@ -18,8 +18,8 @@ spec:
       # to enable progressive deployment on existing cluster you can use node labels:
       #nodeSelector:
       #  kpng: kpng
-
       serviceAccountName: ${SERVICE_ACCOUNT_NAME}
+      # hostPID: true
       hostNetwork: true
       # so that kpng always runs on the controlplane nodes...
       tolerations:
@@ -27,6 +27,19 @@ spec:
         effect: "NoSchedule"
       containers:
       # We'll sed-replace this with a valid kpng image at creat time
+      - image: cilium/cilium-bpftool:b5ba881d2a7ec68d88ecd72efd60ac551c720701
+        imagePullPolicy: ${PULL}
+        name: kpng-ebpf-tools
+        securityContext:
+          privileged: true
+        command: [ "/bin/bash", "-c", "--", "mount bpffs /sys/fs/bpf -t bpf && sleep 100000" ]
+        volumeMounts:
+        - name: modules
+          mountPath: /lib/modules
+          readOnly: true
+        - name: bpf-maps
+          mountPath: /sys/fs/bpf
+          mountPropagation: Bidirectional
       - image: ${IMAGE}
         imagePullPolicy: ${PULL}
         env:
@@ -57,6 +70,9 @@ spec:
         - name: modules
           mountPath: /lib/modules
           readOnly: true
+        - name: bpf-maps
+          mountPath: /sys/fs/bpf
+          mountPropagation: Bidirectional
         args: [ "local", "--api=unix:///k8s/proxy.sock", "to-${E2E_BACKEND}", "--v=${KPNG_DEBUG_LEVEL}"]
         #- --dry-run
       volumes:
@@ -68,3 +84,7 @@ spec:
       - name: kpng-config
         configMap:
           name: ${CONFIG_MAP_NAME}
+      - name: bpf-maps
+        hostPath:
+          path: /sys/fs/bpf
+          type: DirectoryOrCreate
