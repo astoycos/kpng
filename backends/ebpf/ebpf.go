@@ -1,51 +1,95 @@
 package ebpf
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"log"
 	"net"
-	"sync"
+	"os"
+	"strings"
 
-	"github.com/cilium/ebpf"
-	cebpflink "github.com/cilium/ebpf/link"
+	cebpf "github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/rlimit"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog"
 
-	localnetv1 "sigs.k8s.io/kpng/api/localnetv1"
 	"sigs.k8s.io/kpng/client"
 )
 
-type svcEndpointMapping struct {
-	Svc *BaseServiceInfo
+//go:generate bpf2go -cc clang -cflags "-O2 -g -Wall -Werror" bpf ./bpf/cgroup_connect4.c -- -I./bpf/headers
+func ebpfSetup() ebpfController {
+	var err error
 
-	Endpoint []*localnetv1.Endpoint
-}
-
-type ebpfController struct {
-	mu         sync.Mutex        // protects the following fields
-	nodeLabels map[string]string //TODO: looks like can be removed as kpng controller shoujld do the work
-
-	// Keeps track of ebpf objects in memory.
-	objs bpfObjects
-
-	// Program Link,
-	bpfLink cebpflink.Link
-
-	ipFamily v1.IPFamily
-
-	// Caches of what service info our ebpf MAPs should contain
-	svcMap map[ServicePortName]svcEndpointMapping
-}
-
-func NewEBPFController(objs bpfObjects, bpfProgLink cebpflink.Link, ipFamily v1.IPFamily) ebpfController {
-	return ebpfController{
-		objs:     objs,
-		bpfLink:  bpfProgLink,
-		ipFamily: ipFamily,
-		svcMap:   make(map[ServicePortName]svcEndpointMapping),
+	// Allow the current process to lock memory for eBPF resources.
+	if err := rlimit.RemoveMemlock(); err != nil {
+		klog.Fatal(err)
 	}
+
+	// Load pre-compiled programs and maps into the kernel.
+	objs := bpfObjects{}
+	if err := loadBpfObjects(&objs, &cebpf.CollectionOptions{}); err != nil {
+		log.Fatalf("loading objects: %v", err)
+	}
+
+	info, err := objs.bpfMaps.V4SvcMap.Info()
+	if err != nil {
+		klog.Fatalf("Cannot get map info: %v", err)
+	}
+	klog.Infof("Svc Map Info: %+v with FD %s", info, objs.bpfMaps.V4SvcMap.String())
+
+	info, err = objs.bpfMaps.V4BackendMap.Info()
+	if err != nil {
+		klog.Fatalf("Cannot get map info: %v", err)
+	}
+	klog.Infof("Backend Map Info: %+v", info)
+
+	// Get the first-mounted cgroupv2 path.
+	cgroupPath, err := detectRootCgroupPath()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	klog.Infof("Cgroup Path is %s", cgroupPath)
+
+	// Link the proxy program to the default cgroup.
+	l, err := link.AttachCgroup(link.CgroupOptions{
+		Path:    cgroupPath,
+		Attach:  cebpf.AttachCGroupInet4Connect,
+		Program: objs.Sock4Connect,
+	})
+	if err != nil {
+		klog.Fatal(err)
+	}
+
+	klog.Infof("Proxying packets in kernel...")
+
+	return NewEBPFController(objs, l, v1.IPv4Protocol)
+}
+
+// detectCgroupPath returns the first-found mount point of type cgroup2
+// and stores it in the cgroupPath global variable.
+func detectRootCgroupPath() (string, error) {
+	f, err := os.Open("/proc/mounts")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		// example fields: cgroup2 /sys/fs/cgroup/unified cgroup2 rw,nosuid,nodev,noexec,relatime 0 0
+		fields := strings.Split(scanner.Text(), " ")
+		if len(fields) >= 3 && fields[2] == "cgroup2" {
+			return fields[1], nil
+		}
+	}
+
+	return "", errors.New("cgroup2 not mounted")
 }
 
 func (ebc *ebpfController) Cleanup() {
@@ -125,12 +169,12 @@ func (ebc *ebpfController) Sync(keys []ServicePortName) {
 
 		svcKeys, svcValues, backendKeys, backendValues := makeEbpfMaps(svcInfo)
 
-		if _, err := ebc.objs.V4SvcMap.BatchUpdate(svcKeys, svcValues, &ebpf.BatchOptions{}); err != nil {
+		if _, err := ebc.objs.V4SvcMap.BatchUpdate(svcKeys, svcValues, &cebpf.BatchOptions{}); err != nil {
 			klog.Fatalf("Failed Loading service entries: %v", err)
 			ebc.Cleanup()
 		}
 
-		if _, err := ebc.objs.V4BackendMap.BatchUpdate(backendKeys, backendValues, &ebpf.BatchOptions{}); err != nil {
+		if _, err := ebc.objs.V4BackendMap.BatchUpdate(backendKeys, backendValues, &cebpf.BatchOptions{}); err != nil {
 			klog.Fatalf("Failed Loading service backend entries: %v", err)
 			ebc.Cleanup()
 		}
@@ -225,45 +269,3 @@ func makeEbpfMaps(svcMapping svcEndpointMapping) (svcKeys []Service4Key, svcValu
 // 		return 0
 // 	}
 // }
-
-// Types used to interact with ebpf maps
-
-// ServiceEndpoint is used to identify a service and one of its endpoint pair.
-type ServiceEndpoint struct {
-	Endpoint        string
-	ServicePortName ServicePortName
-}
-
-// Service4Value must match 'struct lb4_service_v2' in "bpf/lib/common.h".
-type Service4Value struct {
-	BackendID uint32
-	Count     uint16
-	RevNat    uint16
-	Flags     uint8
-	Flags2    uint8
-	Pad       pad2uint8
-}
-
-// Service4Key must match 'struct lb4_key' in "bpf/lib/common.h".
-type Service4Key struct {
-	Address     IPv4
-	Port        Port
-	BackendSlot uint16
-}
-
-// Backend4Value must match 'struct lb4_backend' in "bpf/lib/common.h".
-type Backend4Value struct {
-	Address IPv4
-	Port    Port
-	Flags   uint8
-	Pad     uint8
-}
-
-type pad2uint8 [2]uint8
-
-type IPv4 [4]byte
-type Port [2]byte
-
-type Backend4Key struct {
-	ID uint32
-}
