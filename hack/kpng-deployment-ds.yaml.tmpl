@@ -32,7 +32,7 @@ spec:
         name: kpng-ebpf-tools
         securityContext:
           privileged: true
-        command: [ "/bin/bash", "-c", "--", "mount bpffs /sys/fs/bpf -t bpf && sleep 100000" ]
+        command: [ "/bin/bash", "-c", "--", "mount bpffs /sys/fs/bpf -t bpf && cat tracing/trace_pipe" ]
         volumeMounts:
         - name: modules
           mountPath: /lib/modules
@@ -40,6 +40,8 @@ spec:
         - name: bpf-maps
           mountPath: /sys/fs/bpf
           mountPropagation: Bidirectional
+        - name: bpf-log
+          mountPath: /tracing
       - image: ${IMAGE}
         imagePullPolicy: ${PULL}
         env:
@@ -88,3 +90,6 @@ spec:
         hostPath:
           path: /sys/fs/bpf
           type: DirectoryOrCreate
+      - name: bpf-log
+        hostPath:
+          path: /sys/kernel/debug/tracing
