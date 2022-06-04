@@ -7,6 +7,14 @@ using clang, and build go bindings
 
 `go generate`
 
+## Start a local kpng ebpf backend kind cluster 
+
+`./hack/test_e2e.sh -i ipv4 -b ebpf -d`
+
+## See ebpf program logs 
+
+`kubectl logs -f <KPNG_POD_NAME> -n kube-system -c kpng-ebpf-tools`
+
 ## Licensing 
 
 The user space components of this example are licensed under the [Apache License, Version 2.0](/LICENSE) as is the
