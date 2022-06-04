@@ -22,4 +22,4 @@ rest of the code defined in KPNG.
 
 The bpf code template (defined in [`cgroup_connect3.c`](/backends/ebpf/bpf/cgroup_connect4.c)) was adapted from
 the bpf templates defined in the [Cilium Project](https://github.com/cilium/cilium) and
-continues to use the same license defined there, i.e the [2-Clause BSD License](/backends/ebpf/bpf/LICENSE.BSD-2-Clause).
+continues to use one of the same licenses defined there, i.e the [2-Clause BSD License](/backends/ebpf/bpf/LICENSE.BSD-2-Clause).
