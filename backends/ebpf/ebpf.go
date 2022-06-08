@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -16,6 +17,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog"
 
 	"sigs.k8s.io/kpng/client"
@@ -99,72 +101,100 @@ func (ebc *ebpfController) Cleanup() {
 }
 
 func (ebc *ebpfController) Callback(ch <-chan *client.ServiceEndpoints) {
-	// Populate internal cache based on incoming information
+	// Used to determine what services are stale in bpf
+	currentSvcKeys := sets.NewString()
+	// Services that need to be updated
+	keysNeedingSync := []string{}
+
+	// Populate internal cache based on incoming fullstate information
 	for serviceEndpoints := range ch {
 		klog.Infof("Iterating fullstate channel, got: %+v", serviceEndpoints)
 
+		klog.Infof("Hi Its Andrew")
 		if serviceEndpoints.Service.Type != "ClusterIP" {
 			klog.Warning("Ebpf Proxy not yet implemented for svc types other than clusterIP")
 			continue
 		}
 
-		svcKey := types.NamespacedName{Name: serviceEndpoints.Service.Name, Namespace: serviceEndpoints.Service.Namespace}
-
-		keysNeedingSync := []ServicePortName{}
+		svcUniqueName := types.NamespacedName{Name: serviceEndpoints.Service.Name, Namespace: serviceEndpoints.Service.Namespace}
 
 		for i := range serviceEndpoints.Service.Ports {
 			servicePort := serviceEndpoints.Service.Ports[i]
-			svcPortName := ServicePortName{NamespacedName: svcKey, Port: servicePort.Name, Protocol: servicePort.Protocol}
+			svcKey := fmt.Sprintf("%s%d%s", svcUniqueName, servicePort.Port, servicePort.Protocol)
 			baseSvcInfo := ebc.newBaseServiceInfo(servicePort, serviceEndpoints.Service)
 			svcEndptRelation := svcEndpointMapping{Svc: baseSvcInfo, Endpoint: serviceEndpoints.Endpoints}
 
-			existing, ok := ebc.svcMap[svcPortName]
+			currentSvcKeys.Insert(svcKey)
+			existing, ok := ebc.svcMap[svcKey]
 
 			// Always update cache regardless of if sync is needed
 			// Eventually we'll spawn multiple go routines to handle this, and then
 			// we'll need the data lock
 			ebc.mu.Lock()
-			ebc.svcMap[svcPortName] = svcEndptRelation
+			ebc.svcMap[svcKey] = svcEndptRelation
+			ebc.svcMapKeys.Insert(svcKey)
 			ebc.mu.Unlock()
 
 			// If svc did not exist, sync
 			if !ok {
-				keysNeedingSync = append(keysNeedingSync, svcPortName)
+				keysNeedingSync = append(keysNeedingSync, svcKey)
 				continue
 			}
 
 			// If svc changed, sync
 			if existing.Svc != svcEndptRelation.Svc {
-				keysNeedingSync = append(keysNeedingSync, svcPortName)
+				keysNeedingSync = append(keysNeedingSync, svcKey)
 			}
 
 			// if # svc endpoints changed sync
 			if len(existing.Endpoint) != len(svcEndptRelation.Endpoint) {
-				keysNeedingSync = append(keysNeedingSync, svcPortName)
+				keysNeedingSync = append(keysNeedingSync, svcKey)
 				continue
 			}
 
 			// if svc endpoints changed sync
 			for i, _ := range existing.Endpoint {
 				if existing.Endpoint[i] != svcEndptRelation.Endpoint[i] {
-					keysNeedingSync = append(keysNeedingSync, svcPortName)
+					keysNeedingSync = append(keysNeedingSync, svcKey)
 					break
 				}
 			}
 		}
 
-		// Reconcile what we have in ebc.svcInfo to internal cache and ebpf maps
-		if len(keysNeedingSync) != 0 {
-			ebc.Sync(keysNeedingSync)
-		}
+	}
 
+	// Reconcile what we have in ebc.svcInfo to internal cache and ebpf maps
+	if len(keysNeedingSync) != 0 || !ebc.svcMapKeys.Equal(currentSvcKeys) {
+		ebc.Sync(keysNeedingSync, ebc.svcMapKeys.Difference(currentSvcKeys).List())
+		// Update cache of svc keys
+		ebc.svcMapKeys = currentSvcKeys
 	}
 }
 
 // Sync will take the new internally cached state and apply it to the bpf maps
 // fully syncing the maps on every iteration.
-func (ebc *ebpfController) Sync(keys []ServicePortName) {
-	for _, key := range keys {
+func (ebc *ebpfController) Sync(syncKeys, deleteKeys []string) {
+
+	for _, key := range deleteKeys {
+		svcInfo := ebc.svcMap[key]
+
+		svcKeys, _, backendKeys, _ := makeEbpfMaps(svcInfo)
+
+		if _, err := ebc.objs.V4SvcMap.BatchDelete(svcKeys, &cebpf.BatchOptions{}); err != nil {
+			// Look at not crashing here.
+			klog.Fatalf("Failed Deleting service entries: %v", err)
+			ebc.Cleanup()
+		}
+
+		if _, err := ebc.objs.V4BackendMap.BatchDelete(backendKeys, &cebpf.BatchOptions{}); err != nil {
+			klog.Fatalf("Failed Deleting service backend entries: %v", err)
+			ebc.Cleanup()
+		}
+		// Remove service entry from cache
+		delete(ebc.svcMap, key)
+	}
+
+	for _, key := range syncKeys {
 		svcInfo := ebc.svcMap[key]
 
 		svcKeys, svcValues, backendKeys, backendValues := makeEbpfMaps(svcInfo)

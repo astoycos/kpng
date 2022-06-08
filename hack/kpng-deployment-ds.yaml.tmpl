@@ -32,7 +32,7 @@ spec:
         name: kpng-ebpf-tools
         securityContext:
           privileged: true
-        command: [ "/bin/bash", "-c", "--", "mount bpffs /sys/fs/bpf -t bpf && cat tracing/trace_pipe" ]
+        command: [ "/bin/bash", "-c", "--", "mount bpffs /sys/fs/bpf -t bpf && sleep infinity" ]
         volumeMounts:
         - name: modules
           mountPath: /lib/modules

@@ -26,6 +26,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 // Userspace Types
@@ -37,7 +38,7 @@ type svcEndpointMapping struct {
 
 type ebpfController struct {
 	mu         sync.Mutex        // protects the following fields
-	nodeLabels map[string]string //TODO: looks like can be removed as kpng controller shoujld do the work
+	nodeLabels map[string]string // TODO: looks like can be removed as kpng controller shoujld do the work
 
 	// Keeps track of ebpf objects in memory.
 	objs bpfObjects
@@ -48,15 +49,19 @@ type ebpfController struct {
 	ipFamily v1.IPFamily
 
 	// Caches of what service info our ebpf MAPs should contain
-	svcMap map[ServicePortName]svcEndpointMapping
+	svcMap map[string]svcEndpointMapping
+
+	// Cache of all service keys in the svcMap, used to build deletion lists
+	svcMapKeys sets.String
 }
 
 func NewEBPFController(objs bpfObjects, bpfProgLink cebpflink.Link, ipFamily v1.IPFamily) ebpfController {
 	return ebpfController{
-		objs:     objs,
-		bpfLink:  bpfProgLink,
-		ipFamily: ipFamily,
-		svcMap:   make(map[ServicePortName]svcEndpointMapping),
+		objs:       objs,
+		bpfLink:    bpfProgLink,
+		ipFamily:   ipFamily,
+		svcMap:     make(map[string]svcEndpointMapping),
+		svcMapKeys: sets.NewString(),
 	}
 }
 
@@ -69,7 +74,7 @@ type ServicePortName struct {
 }
 
 func (spn ServicePortName) String() string {
-	return fmt.Sprintf("%s%s", spn.NamespacedName.String(), fmtPortName(spn.Port))
+	return fmt.Sprintf("%s%s%s", spn.NamespacedName.String(), fmtPortName(spn.Port), spn.Protocol)
 }
 
 func fmtPortName(in string) string {
