@@ -684,6 +684,7 @@ function add_to_path {
     # Arguments:                                                              #
     #   arg1:  directory                                                      #
     ###########################################################################
+    [ $# -eq 1 ]
     if_error_exit "Wrong number of arguments to ${FUNCNAME[0]}"
 
     local directory="${1}"
