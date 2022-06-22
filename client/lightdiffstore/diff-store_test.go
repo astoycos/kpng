@@ -62,8 +62,11 @@ func ExampleDiffStore() {
 
 	// double reset will remove all entries (and should not crash)
 	s.Reset(ItemDeleted)
+
+	fmt.Printf("%v\n", s.tree.Len())
 	s.Reset(ItemDeleted)
 
+	fmt.Println()
 	fmt.Println("tree size after double reset:", s.tree.Len())
 
 	// Output:
@@ -96,13 +99,13 @@ func ExampleDiffPortMapping() {
 
 		fmt.Println("updated:", s.Updated(), "deleted:", s.Deleted())
 	}
+	set(80)
+	set(80, 81)
+	set(443)
+	fmt.Printf("%v", s.tree.Len())
 
 	// Output:
-	set(80)
 	// updated: [{my-ns/my-svc:80 => 80}] deleted: []
-	set(80, 81)
 	// updated: [{my-ns/my-svc:81 => 81}] deleted: []
-	set(443)
 	// updated: [{my-ns/my-svc:443 => 443}] deleted: [{my-ns/my-svc:81 => 81} {my-ns/my-svc:80 => 80}]
-
 }
