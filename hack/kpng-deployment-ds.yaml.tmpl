@@ -76,9 +76,9 @@ spec:
           mountPropagation: Bidirectional
         - name: cgroup-v2-fs
           mountPath: /sys/fs/cgroup/unified
-          readOnly: true
         - name: cgroup-v2-mount
           mountPath: /host-mount/mounts
+          mountPropagation: HostToContainer
         args: [ "local", "--api=unix:///k8s/proxy.sock", "to-${E2E_BACKEND}", "--v=${KPNG_DEBUG_LEVEL}"]
         #- --dry-run
       volumes:
