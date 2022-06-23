@@ -35,6 +35,12 @@ func ebpfSetup() ebpfController {
 		klog.Fatal(err)
 	}
 
+	// We'll need some smarter mechanism to determine interface here
+	iface, err := net.InterfaceByName("eth0")
+	if err != nil {
+		log.Fatalf("lookup network iface %q: %s", "cni-podman0", err)
+	}
+
 	// Load pre-compiled programs and maps into the kernel.
 	objs := bpfObjects{}
 	if err := loadBpfObjects(&objs, &cebpf.CollectionOptions{}); err != nil {
@@ -62,7 +68,7 @@ func ebpfSetup() ebpfController {
 	klog.Infof("Cgroup Path is %s", cgroupPath)
 
 	// Link the proxy program to the default cgroup.
-	l, err := link.AttachCgroup(link.CgroupOptions{
+	cgroupLink, err := link.AttachCgroup(link.CgroupOptions{
 		Path:    cgroupPath,
 		Attach:  cebpf.AttachCGroupInet4Connect,
 		Program: objs.Sock4Connect,
@@ -71,9 +77,19 @@ func ebpfSetup() ebpfController {
 		klog.Fatal(err)
 	}
 
+	// Link the XDP program to the main node interface
+	// Attach the program.
+	xdpLink, err := link.AttachXDP(link.XDPOptions{
+		Program:   objs.XdpNodeportRedirect,
+		Interface: iface.Index,
+	})
+	if err != nil {
+		log.Fatalf("could not attach XDP program: %s", err)
+	}
+
 	klog.Infof("Proxying packets in kernel...")
 
-	return NewEBPFController(objs, l, v1.IPv4Protocol)
+	return NewEBPFController(objs, cgroupLink, xdpLink, v1.IPv4Protocol)
 }
 
 // detectCgroupPath returns the first-found mount point of type cgroup2
@@ -100,7 +116,8 @@ func detectRootCgroupPath() (string, error) {
 
 func (ebc *ebpfController) Cleanup() {
 	klog.Info("Cleaning Up EBPF resources")
-	ebc.bpfLink.Close()
+	ebc.bpfCgroupLink.Close()
+	ebc.bpfXDPLink.Close()
 	ebc.objs.Close()
 }
 

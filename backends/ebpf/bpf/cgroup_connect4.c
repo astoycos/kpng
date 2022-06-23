@@ -1,10 +1,15 @@
 /* SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause) */
 
+
 #include <linux/bpf.h>
 #include <linux/in.h>
 #include <stdbool.h>
 #include <errno.h>
-#include "common.h"
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <linux/if_ether.h>
+#include "headers/bpf_endian.h"
+#include "headers/common.h"
 
 #define SYS_REJECT 0
 #define SYS_PROCEED 1
@@ -194,4 +199,62 @@ int sock4_connect(struct bpf_sock_addr *ctx) {
 
   __sock4_fwd(ctx);
   return SYS_PROCEED;
+}
+
+
+const volatile int ifindex_out;
+
+SEC("xdp")
+int xdp_nodeport_redirect(struct xdp_md *ctx)
+{
+	void *data_end = (void *)(long)ctx->data_end;
+	void *data = (void *)(long)ctx->data;
+	struct ethhdr *eth = data;
+  struct tcphdr *tcph;
+  u16 h_proto;
+  u64 nh_off;
+  u64 tcp_off;
+
+	nh_off = sizeof(*eth);
+
+  struct iphdr *iph = data + nh_off;
+
+  tcp_off = nh_off + sizeof(*iph); 
+
+	if (data + tcp_off > data_end)
+		return XDP_PASS;
+
+  const char debug_str[] = "Hello, world, from BPF! I am in the XDP program. dst IP is %x src IP is %x protocol %d";
+
+  bpf_trace_printk(debug_str, sizeof(debug_str), iph->daddr, iph->saddr, iph->protocol);
+
+  tcp_off = nh_off + sizeof(*iph); 
+
+  h_proto = eth->h_proto;
+
+	if (h_proto == bpf_htons(ETH_P_IP)) {
+    if (iph->protocol != IPPROTO_TCP)
+        return XDP_PASS;
+
+    tcph = data + tcp_off;
+
+    // Check header.
+    if (tcph + 1 > (struct tcphdr *)data_end)
+    {
+        return XDP_PASS;
+    }
+
+    const char debug_str[] = "Hello, world, from BPF! I am in the XDP program. dst IP is %d dest port is %d eth offset %d";
+
+    bpf_trace_printk(debug_str, sizeof(debug_str), bpf_ntohs(iph->daddr), bpf_ntohs(tcph->dest), nh_off);
+
+    if (bpf_ntohs(tcph->dest) == 8321) { 
+        const char debug_str[] = "Hello, world, from BPF! I am in the XDP program. I caught a\
+        packet destined for my NodePort (8321), the port is: %d\n";
+        
+        bpf_trace_printk(debug_str, sizeof(debug_str),  bpf_ntohs(tcph->dest));
+    }
+  }
+
+	return XDP_PASS;
 }

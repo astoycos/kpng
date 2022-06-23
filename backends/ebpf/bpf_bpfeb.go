@@ -76,7 +76,8 @@ type bpfSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfProgramSpecs struct {
-	Sock4Connect *ebpf.ProgramSpec `ebpf:"sock4_connect"`
+	Sock4Connect        *ebpf.ProgramSpec `ebpf:"sock4_connect"`
+	XdpNodeportRedirect *ebpf.ProgramSpec `ebpf:"xdp_nodeport_redirect"`
 }
 
 // bpfMapSpecs contains maps before they are loaded into the kernel.
@@ -121,12 +122,14 @@ func (m *bpfMaps) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfPrograms struct {
-	Sock4Connect *ebpf.Program `ebpf:"sock4_connect"`
+	Sock4Connect        *ebpf.Program `ebpf:"sock4_connect"`
+	XdpNodeportRedirect *ebpf.Program `ebpf:"xdp_nodeport_redirect"`
 }
 
 func (p *bpfPrograms) Close() error {
 	return _BpfClose(
 		p.Sock4Connect,
+		p.XdpNodeportRedirect,
 	)
 }
 

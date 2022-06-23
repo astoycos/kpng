@@ -44,7 +44,8 @@ type ebpfController struct {
 	objs bpfObjects
 
 	// Program Link,
-	bpfLink cebpflink.Link
+	bpfCgroupLink cebpflink.Link
+	bpfXDPLink    cebpflink.Link
 
 	ipFamily v1.IPFamily
 
@@ -52,12 +53,13 @@ type ebpfController struct {
 	svcMap *lightdiffstore.DiffStore
 }
 
-func NewEBPFController(objs bpfObjects, bpfProgLink cebpflink.Link, ipFamily v1.IPFamily) ebpfController {
+func NewEBPFController(objs bpfObjects, bpfCgroupLink cebpflink.Link, bpfXDPLink cebpflink.Link, ipFamily v1.IPFamily) ebpfController {
 	return ebpfController{
-		objs:     objs,
-		bpfLink:  bpfProgLink,
-		ipFamily: ipFamily,
-		svcMap:   lightdiffstore.New(),
+		objs:          objs,
+		bpfCgroupLink: bpfCgroupLink,
+		bpfXDPLink:    bpfXDPLink,
+		ipFamily:      ipFamily,
+		svcMap:        lightdiffstore.New(),
 	}
 }
 
