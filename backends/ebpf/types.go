@@ -29,6 +29,12 @@ import (
 	"sigs.k8s.io/kpng/client/lightdiffstore"
 )
 
+const (
+	ClusterIPService    = "ClusterIP"
+	NodePortService     = "NodePort"
+	LoadBalancerService = "LoadBalancer"
+)
+
 // Userspace Types
 type svcEndpointMapping struct {
 	Svc *BaseServiceInfo
@@ -361,9 +367,10 @@ type Service4Value struct {
 	BackendID uint32
 	Count     uint16
 	RevNat    uint16
-	Flags     uint8
-	Flags2    uint8
-	Pad       pad2uint8
+	// used to signal a nodeport service lookup
+	Flags  uint8
+	Flags2 uint8
+	Pad    pad2uint8
 }
 
 // Service4Key must match 'struct lb4_key' in "bpf/lib/common.h".

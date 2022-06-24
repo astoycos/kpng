@@ -35,7 +35,8 @@ func ebpfSetup() ebpfController {
 		klog.Fatal(err)
 	}
 
-	// We'll need some smarter mechanism to determine interface here
+	// TODO (astoycos) We'll need some smarter mechanism to determine the physical nic interface here
+	// for a Kind cluster at least it's eth0
 	iface, err := net.InterfaceByName("eth0")
 	if err != nil {
 		log.Fatalf("lookup network iface %q: %s", "cni-podman0", err)
@@ -96,6 +97,7 @@ func ebpfSetup() ebpfController {
 // and stores it in the cgroupPath global variable.
 func detectRootCgroupPath() (string, error) {
 	// This corresponds to the host's mount's location in the pod deploying this backend.
+	// TODO (astoycos) Make this value and environment var
 	f, err := os.Open("/host-mount/mounts")
 	if err != nil {
 		return "", err
@@ -129,7 +131,7 @@ func (ebc *ebpfController) Callback(ch <-chan *client.ServiceEndpoints) {
 	for serviceEndpoints := range ch {
 		klog.V(5).Infof("Iterating fullstate channel, got: %+v", serviceEndpoints)
 
-		if serviceEndpoints.Service.Type != "ClusterIP" {
+		if serviceEndpoints.Service.Type != ClusterIPService && serviceEndpoints.Service.Type != NodePortService {
 			klog.Warning("Ebpf Proxy not yet implemented for svc types other than clusterIP")
 			continue
 		}
@@ -212,6 +214,7 @@ func makeEbpfMaps(svcMapping svcEndpointMapping) (svcKeys []Service4Key, svcValu
 	backendKeys []Backend4Key, backendValues []Backend4Value) {
 	// Make sure what we store here is in network endian
 	var svcAddress [4]byte
+	var nodePort [2]byte
 	var svcPort [2]byte
 	var targetPort [2]byte
 	var backendAddress [4]byte
@@ -224,6 +227,33 @@ func makeEbpfMaps(svcMapping svcEndpointMapping) (svcKeys []Service4Key, svcValu
 	// Hack for service Port name
 	binary.BigEndian.PutUint16(targetPort[:], uint16(svcMapping.Svc.targetPort))
 	binary.BigEndian.PutUint16(svcPort[:], uint16(svcMapping.Svc.port))
+
+	// If theres a nodeport make a special service and backend bpfmap to redirect to clusterIP
+	if svcMapping.Svc.NodePort() != 0 {
+		klog.Infof("Adding Nodeport service for port: %d", svcMapping.Svc.nodePort)
+		binary.BigEndian.PutUint16(nodePort[:], uint16(svcMapping.Svc.nodePort))
+
+		svcKeys = append(svcKeys, Service4Key{
+			Address:     [4]byte{0},
+			Port:        nodePort,
+			BackendSlot: 0,
+		})
+
+		svcValues = append(svcValues, Service4Value{Count: 0,
+			BackendID: uint32(svcMapping.Svc.nodePort),
+			Flags:     1,
+		})
+
+		backendKeys = append(backendKeys, Backend4Key{
+			ID: uint32(svcMapping.Svc.nodePort),
+		})
+
+		backendValues = append(backendValues, Backend4Value{
+			Address: svcAddress,
+			Port:    svcPort,
+		})
+
+	}
 
 	for _, endpoint := range svcMapping.Endpoint {
 		addresses = append(addresses, endpoint.IPs.V4...)
