@@ -36,23 +36,14 @@ func init() {
 	backendcmd.Register("to-ebpf", func() backendcmd.Cmd { return &backend{} })
 }
 
+//Implement this if the ebpfbackend requires a custom flag set
 func (s *backend) BindFlags(flags *pflag.FlagSet) {
 }
-
-func (s *backend) Reset() { /* noop */ }
-
-// WaitRequest see localsink.Sink#WaitRequest
-// func (s *backend) WaitRequest() (nodeName string, err error) {
-// 	name, _ := os.Hostname()
-// 	return name, nil
-// }
 
 func (s *backend) Setup() {
 	ebc = ebpfSetup()
 	klog.Infof("Loading ebpf maps and program %+v", ebc)
 }
-
-func (b *backend) Sync() { /* no-op */ }
 
 func (b *backend) Sink() localsink.Sink {
 	sink := fullstate.New(&b.cfg)
