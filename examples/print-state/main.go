@@ -17,12 +17,18 @@ limitations under the License.
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
-	"os"
 	"time"
 
+	"github.com/cespare/xxhash"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/kpng/client"
+	"sigs.k8s.io/kpng/client/lightdiffstore"
 )
+
+var state *lightdiffstore.DiffStore = lightdiffstore.New()
 
 func main() {
 	client.Run(printState)
@@ -32,7 +38,20 @@ func printState(items []*client.ServiceEndpoints) {
 	fmt.Println("# ------------------------------------------------------------------------")
 	fmt.Println("#", time.Now())
 	fmt.Println("#")
+
 	for _, item := range items {
-		fmt.Fprintln(os.Stdout, item)
+		state.Reset(lightdiffstore.ItemChanged)
+		svcUniqueName := types.NamespacedName{Name: item.Service.Name, Namespace: item.Service.Namespace}
+
+		for _, port := range item.Service.Ports {
+			svcKey := fmt.Sprintf("%s/%d/%s", svcUniqueName, port.Port, port.Protocol)
+
+			// JSON encoding of our services + EP information
+			svcEndptRelationBytes := new(bytes.Buffer)
+			json.NewEncoder(svcEndptRelationBytes).Encode(item)
+			state.Set([]byte(svcKey), xxhash.Sum64(svcEndptRelationBytes.Bytes()), item)
+		}
 	}
+
+	fmt.Printf("Number of Events: %d\nNumber of Backend Relevant update/create Events: %d\n", len(items), len(state.Updated()))
 }
